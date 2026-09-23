@@ -1,0 +1,38 @@
+---
+# Execute the restart immediately for this one broker.
+- name: Flush pending Kafka restart handler
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for Kafka listener
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host | default(inventory_hostname) }}"
+    port: "{{ kafka_port }}"
+    state: started
+    timeout: "{{ kafka_health_timeout }}"
+
+- name: Wait for Kafka cluster to recover
+  ansible.builtin.command:
+    cmd: >-
+      {{ kafka_health_script }}
+      --service {{ kafka_service_name }}
+      --host 127.0.0.1
+      --port {{ kafka_port }}
+      --kafka-topics {{ kafka_topics_command }}
+      --bootstrap-server {{ kafka_bootstrap_server }}
+  register: kafka_post_restart
+  changed_when: false
+  retries: "{{ kafka_health_retries }}"
+  delay: "{{ kafka_health_delay }}"
+  until: kafka_post_restart.rc == 0
+
+- name: Display Kafka post-restart health
+  ansible.builtin.debug:
+    var: kafka_post_restart.stdout_lines
+
+- name: Fail if Kafka did not recover
+  ansible.builtin.fail:
+    msg: |
+      Kafka broker {{ inventory_hostname }} did not recover successfully.
+
+      {{ kafka_post_restart.stdout }}
+  when: kafka_post_restart.rc != 0

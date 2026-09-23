@@ -1,0 +1,18 @@
+---
+kafka_service_name: kafka
+kafka_config_file: /etc/kafka/server.properties
+kafka_health_script: /usr/local/bin/kafka_health_check.py
+
+kafka_health_timeout: 300
+kafka_health_retries: 30
+kafka_health_delay: 10
+
+kafka_port: 9092
+
+# Example assessment change.
+kafka_config_changes:
+  log.retention.hours: "168"
+
+# Override for your Kafka installation.
+kafka_topics_command: /opt/kafka/bin/kafka-topics.sh
+kafka_bootstrap_server: "127.0.0.1:9092"

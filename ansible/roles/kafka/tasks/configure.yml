@@ -1,0 +1,10 @@
+---
+- name: Update Kafka server.properties
+  ansible.builtin.lineinfile:
+    path: "{{ kafka_config_file }}"
+    regexp: "^{{ item.key }}="
+    line: "{{ item.key }}={{ item.value }}"
+    backup: true
+  loop: "{{ kafka_config_changes | dict2items }}"
+  notify:
+    - Restart Kafka

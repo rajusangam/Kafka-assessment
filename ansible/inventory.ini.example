@@ -1,0 +1,10 @@
+[kafka_brokers]
+kafka01 ansible_host=10.10.10.11 kafka_broker_id=1
+kafka02 ansible_host=10.10.10.12 kafka_broker_id=2
+kafka03 ansible_host=10.10.10.13 kafka_broker_id=3
+kafka04 ansible_host=10.10.10.14 kafka_broker_id=4
+kafka05 ansible_host=10.10.10.15 kafka_broker_id=5
+kafka06 ansible_host=10.10.10.16 kafka_broker_id=6
+
+[kafka_brokers:vars]
+ansible_user=ubuntu

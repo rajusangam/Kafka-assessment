@@ -1,0 +1,30 @@
+---
+- name: Verify Kafka service is running before changes
+  ansible.builtin.systemd:
+    name: "{{ kafka_service_name }}"
+    state: started
+  check_mode: false
+
+- name: Run Kafka cluster health check before changing broker
+  ansible.builtin.command:
+    cmd: >-
+      {{ kafka_health_script }}
+      --service {{ kafka_service_name }}
+      --host 127.0.0.1
+      --port {{ kafka_port }}
+      --kafka-topics {{ kafka_topics_command }}
+      --bootstrap-server {{ kafka_bootstrap_server }}
+  register: kafka_preflight
+  changed_when: false
+
+- name: Display Kafka pre-flight result
+  ansible.builtin.debug:
+    var: kafka_preflight.stdout_lines
+
+- name: Abort if Kafka cluster is unhealthy
+  ansible.builtin.fail:
+    msg: |
+      Kafka cluster failed the pre-flight health check.
+
+      {{ kafka_preflight.stdout }}
+  when: kafka_preflight.rc != 0

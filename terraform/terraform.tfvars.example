@@ -1,0 +1,9 @@
+# Do not put real credentials in this file.
+# Prefer:
+# export CONFLUENT_CLOUD_API_KEY="..."
+# export CONFLUENT_CLOUD_API_SECRET="..."
+
+environment_name = "kafka-platform-assessment"
+cluster_name     = "assessment-kafka"
+cloud            = "GCP"
+region           = "us-central1"
