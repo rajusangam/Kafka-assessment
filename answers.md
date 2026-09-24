@@ -2,25 +2,25 @@
 
 ## 1.1 Durability basics (`acks=all`, RF=3, `min.insync.replicas=2`)
 
-A producer writes with (** acks=all **), and the topic is configured with:
+A producer writes with (**acks=all**), and the topic is configured with:
 
-* (** Replication Factor (RF): 3 **)
+* (**Replication Factor (RF): 3**)
 
-* (** min.insync.replicas = 2 **)
+* (**min.insync.replicas = 2**)
 
 This configuration provides strong durability guarantees.
 
 ### What `acks=all` waits for.
-* acks=all (or acks=-1) means: The leader will acknowledge the write only after all in‑sync replicas (ISR) have successfully written the message to their logs.
+* `acks=all` (or `acks=-1`) means: The leader will acknowledge the write only after all in‑sync replicas (ISR) have successfully written the message to their logs.
 
-* With min.insync.replicas=2, Kafka requires:
+* With `min.insync.replicas=2`, Kafka requires:
 
-Leader + (** at least one follower **) to confirm the write before acknowledging the producer.
+Leader + (**at least one follower**) to confirm the write before acknowledging the producer.
 
 If fewer than 2 replicas are in the ISR, the write is rejected.
 ### Flow Diagram
 
-(** sequence Diagram ** )
+(**sequence Diagram**)
     participant Producer
     participant Leader
     participant Follower1
@@ -35,12 +35,12 @@ If fewer than 2 replicas are in the ISR, the write is rejected.
 
 ### What happens when one broker holding a replica goes offline ?
 
-  With RF=3, suppose one follower goes offline:
+  With `RF=3`, suppose one follower goes offline:
 
-* ISR shrinks from (** [Leader, F1, F2] → [Leader, F1] **)
+* ISR shrinks from **[Leader, F1, F2] → [Leader, F1]**
    The ISR shrinks from 3 to 2 (if the dead broker led a partition, the controller elects a new leader from the ISR).
 
-* ISR still has (** 2 replicas **), which satisfies `min.insync.replicas=2`
+* ISR still has **2 replicas**, which satisfies `min.insync.replicas=2`
 
    2 >= min ISR, so writes keep succeeding, now acknowledged by the two survivors. There is a short stall first: until the dead follower is dropped from the ISR (`replica.lag.time.max.ms`, 30 s by default), `acks=all` is still waiting on it. `UnderReplicatedPartitions` goes above 0. That is an alert, not an outage.
 * Producer writes with acks=all continue normally
@@ -62,7 +62,7 @@ If two brokers fail:
 
 ISR shrinks to only the leader → ISR = [Leader]
 
-ISR count = 1, which is less than min.insync.replicas=2
+**ISR** count = 1, which is less than min.insync.replicas=2
 
 Kafka rejects all writes with NOT_ENOUGH_REPLICAS error
 
@@ -80,7 +80,7 @@ Ensures every acknowledged write is stored on at least two brokers
 Protects against single‑broker failure
 
 #### 2. Availability
-If min.insync.replicas=3:
+If `min.insync.replicas=3`:
 
 All three replicas must be in sync for writes to succeed
 
@@ -89,40 +89,40 @@ Even one broker going offline would block all writes
 This is too strict for most production environments
 
 #### 3. Practicality
-With RF=3, requiring 2 in‑sync replicas is the industry standard
+With `RF=3`, requiring 2 in‑sync replicas is the industry standard
 
 Allows the cluster to tolerate one broker failure without impacting producers
 
 #### Summary Table
 
-| Setting | Durability | Availability | Practical? |
-| --- | --- | --- | --- |
-| **min.insync.replicas=1** | Weak | High | Risky |
-| **min.insync.replicas=2** | Strong | Good | ✔ Common choice |
-| **min.insync.replicas=3** | Very strong | Low | ✘ Too strict |
+|          Setting          | Durability | Availability | Practical? |
+|   ---                     |    ---     |     ---      |       ---     |
+| **min.insync.replicas=1** | Weak       |    High      |   Risky |
+| **min.insync.replicas=2** | Strong     |    Good      | ✔ Common choice |
+| **min.insync.replicas=3** | Very strong |    Low      | ✘ Too strict |
 
 ## 1.2 Confluent Cloud on GCP — network path
 
 ```text
-GCE client
+**GCE client**
     |
     | DNS lookup for Kafka bootstrap hostname
     v
-Private Cloud DNS zone
+**Private Cloud DNS zone**
     |
     | resolves to PSC endpoint IP
     v
-GCP Private Service Connect endpoint
+**GCP Private Service Connect endpoint**
     |
     v
-Confluent Cloud network
+**Confluent Cloud network**
     |
     v
-Kafka bootstrap endpoint
+**Kafka bootstrap endpoint**
     |
     | Metadata response
     v
-Per-broker hostnames
+**Per-broker hostnames**
     |
     +----> Broker 1 connection
     +----> Broker 2 connection
