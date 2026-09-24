@@ -215,9 +215,7 @@ If Kafka is configured with a dedicated JVM GC log, I would inspect that configu
 
 ### 1.4.1 Why is **serial: 3** unsafe here?
 * **serial: 3** - Restarting **3 out of 6 brokers at the same time** is unsafe because Kafka’s replication and ISR stability depend on brokers being restarted **one at a time**.
-With `RF=3`, restarting half the brokers simultaneously can cause multiple replicas of the same partition to go offline, shrinking the ISR and creating **Under‑Replicated Partitions (URPs)**.
-
-Kafka cannot maintain durability guarantees when too many replicas disappear at once, especially if leaders and followers for the same partitions are restarted together.
+With `RF=3`, restarting half the brokers simultaneously can cause multiple replicas of the same partition to go offline, shrinking the ISR and creating **Under‑Replicated Partitions (URPs)**. Kafka cannot maintain durability guarantees when too many replicas disappear at once, especially if leaders and followers for the same partitions are restarted together.
 Without health checks, the play may restart brokers that are currently leaders or already lagging, amplifying the risk.
 Safe rolling restarts require **serial: 1** and strict readiness checks before moving to the next broker.
 
@@ -242,16 +240,6 @@ Safe rolling restarts require **serial: 1** and strict readiness checks before m
 * Validate metrics like isr-expands, replica-lag, and offline-partitions before proceeding.
 
 These checks ensure safe rolling restarts and prevent cascading replication failures.
-
-**Recovery order:**
-
-1. Stop the Ansible rollout.
-2. Identify unavailable brokers and affected partitions.
-3. Bring failed brokers back online.
-4. Wait for replicas to catch up and ISR to recover.
-5. Confirm `UnderReplicatedPartitions=0` and no offline partitions.
-6. Check client/leader-election errors.
-7. Resume changes one broker at a time only after the cluster is healthy.
 
 ### 1.4.3 Recovery Steps (in correct order)
 
