@@ -245,23 +245,23 @@ These checks ensure safe rolling restarts and prevent cascading replication fail
 
 **1. Identify affected brokers and partitions**
 
-* Check UnderReplicatedPartitions, broker logs, and cluster metadata.
+* Check **UnderReplicatedPartitions**, **broker logs**, and **cluster metadata**.
 
 **2. Stabilize the cluster**
 
-* Ensure no additional brokers are restarted.
+* Ensure **no additional brokers** are restarted.
 
-* Stop any ongoing automation or Ansible tasks.
+* Stop any ongoing automation or **Ansible** tasks.
 
-** 3. Bring brokers back online one at a time**
+**3. Bring brokers back online one at a time**
 
 * Restart any brokers still down.
 
-* Wait for each broker to fully rejoin ISR.
+* Wait for each broker to fully rejoin **ISR**.
 
 **4. Trigger preferred leader election (optional but recommended)**
 
-* Helps rebalance leadership and reduce replication pressure.
+* Helps **rebalance leadership** and reduce **replication** pressure.
 
 **5. Monitor replication recovery**
 
