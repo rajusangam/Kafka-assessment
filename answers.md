@@ -211,9 +211,37 @@ grep -Ei 'GC pause|Full GC|Pause Young|Pause Full|gc' /var/log/kafka/server.log 
 
 If Kafka is configured with a dedicated JVM GC log, I would inspect that configured file instead of assuming a log path.
 
-## 1.4 Ansible change gone wrong
+## 1.4 Ansible change gone wrong — Broker Restart Issue
 
-`serial: 3` is unsafe because three of six brokers can be unavailable simultaneously. Depending on partition placement and leadership, that can remove multiple replicas or leaders for many partitions at once and cause ISR shrinkage. The play should first verify the cluster is healthy and `UnderReplicatedPartitions` is zero. It should then use `serial: 1` and wait for the restarted broker to rejoin before touching another broker. A post-restart health check should verify broker availability, ISR recovery and offline partitions.
+### 1.4.1 Why is **serial: 3** unsafe here?
+* **serial: 3** - Restarting **3 out of 6 brokers at the same time** is unsafe because Kafka’s replication and ISR stability depend on brokers being restarted **one at a time**.
+With `RF=3`, restarting half the brokers simultaneously can cause multiple replicas of the same partition to go offline, shrinking the ISR and creating **Under‑Replicated Partitions (URPs)**.
+
+Kafka cannot maintain durability guarantees when too many replicas disappear at once, especially if leaders and followers for the same partitions are restarted together.
+Without health checks, the play may restart brokers that are currently leaders or already lagging, amplifying the risk.
+Safe rolling restarts require **serial: 1** and strict readiness checks before moving to the next broker.
+
+### 1.4.2 Three safety checks the play should include
+
+**1. ISR / URP Check Before Restart**
+
+* Ensure UnderReplicatedPartitions == 0 before restarting any broker.
+
+* Prevents restarting brokers when the cluster is already degraded.
+
+**2. Leader Election / Partition Movement Check**
+
+* Confirm the broker is not hosting too many leaders or critical partitions.
+
+* Optionally trigger preferred leader election before restart.
+
+**3. Broker Health & Readiness Check After Restart**
+
+* Wait for the broker to rejoin the cluster, recover replicas, and return to ISR.
+
+* Validate metrics like isr-expands, replica-lag, and offline-partitions before proceeding.
+
+These checks ensure safe rolling restarts and prevent cascading replication failures.
 
 **Recovery order:**
 
@@ -225,6 +253,58 @@ If Kafka is configured with a dedicated JVM GC log, I would inspect that configu
 6. Check client/leader-election errors.
 7. Resume changes one broker at a time only after the cluster is healthy.
 
+### 1.4.3 Recovery Steps (in correct order)
+
+**1. Identify affected brokers and partitions**
+
+* Check UnderReplicatedPartitions, broker logs, and cluster metadata.
+
+**2. Stabilize the cluster**
+
+* Ensure no additional brokers are restarted.
+
+* Stop any ongoing automation or Ansible tasks.
+
+** 3. Bring brokers back online one at a time**
+
+* Restart any brokers still down.
+
+* Wait for each broker to fully rejoin ISR.
+
+**4. Trigger preferred leader election (optional but recommended)**
+
+* Helps rebalance leadership and reduce replication pressure.
+
+**5. Monitor replication recovery**
+
+* Watch metrics: `UnderReplicatedPartitions`, `ISR`, `replica-lag`, `offline-partitions`.
+
+**6. Verify cluster health**
+
+* Ensure URPs return to zero and all replicas are in sync.
+
+**7. Fix the Ansible playbook**
+
+* Change `serial: 3` → `serial: 1`
+
+* Add health checks and readiness conditions.
+
 ## 1.5 ZooKeeper vs KRaft
 
-ZooKeeper provides metadata coordination and controller-election functionality in the traditional Kafka architecture. KRaft replaces ZooKeeper with Kafka's own Raft-based metadata quorum. KRaft keeps cluster metadata management inside Kafka instead of requiring a separate ZooKeeper system. For a new cluster today, I would use KRaft because it is Kafka's native metadata architecture and removes the separate ZooKeeper dependency. The final choice should still consider the Kafka version and compatibility requirements of the target platform.
+### 1.5.1 What role does ZooKeeper play in a Kafka cluster that uses it?
+* ZooKeeper manages Kafka’s metadata, including broker registrations, topic configurations, partition assignments, and ISR membership.
+It also coordinates controller election and stores the authoritative cluster state.
+Kafka brokers rely on ZooKeeper for consistent metadata updates and cluster-wide coordination.
+Without ZooKeeper, a traditional Kafka cluster cannot elect a controller or maintain partition leadership.
+
+### 1.5.2 What replaces ZooKeeper in a KRaft cluster?
+* KRaft (**Kafka Raft**) replaces ZooKeeper with an internal **metadata quorum** running directly inside Kafka.
+The quorum uses the Raft consensus protocol to store and replicate metadata across dedicated controller nodes.
+Kafka brokers read metadata from this quorum, eliminating the external dependency on **ZooKeeper**.
+This makes Kafka a fully self-managed distributed system with simplified operations.
+
+### 1.5.3 If you were building a new cluster today, which mode would you pick and why?
+* I would choose **KRaft mode**, because it is the modern architecture designed for future Kafka releases.
+It removes the operational complexity of managing ZooKeeper and provides a unified, simpler deployment model.
+KRaft offers faster controller failover, improved metadata scalability, and better alignment with Kafka’s long-term roadmap.
+Since ZooKeeper support is being phased out, KRaft is the recommended choice for new clusters.
