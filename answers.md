@@ -2,24 +2,25 @@
 
 ## 1.1 Durability basics (`acks=all`, RF=3, `min.insync.replicas=2`)
 
-A producer writes with acks=all, and the topic is configured with:
+A producer writes with (** acks=all **), and the topic is configured with:
 
-* Replication Factor (RF): 3 
+* (** Replication Factor (RF): 3 **)
 
-* min.insync.replicas = 2
+* (** min.insync.replicas = 2 **)
 
 This configuration provides strong durability guarantees.
 
-**What `acks=all` waits for.
+### What `acks=all` waits for.
 * acks=all (or acks=-1) means: The leader will acknowledge the write only after all in‑sync replicas (ISR) have successfully written the message to their logs.
 
 * With min.insync.replicas=2, Kafka requires:
 
-Leader + at least one follower to confirm the write before acknowledging the producer.
+Leader + (** at least one follower **) to confirm the write before acknowledging the producer.
 
 If fewer than 2 replicas are in the ISR, the write is rejected.
+### Flow Diagram
 
-sequenceDiagram
+(** sequence Diagram ** )
     participant Producer
     participant Leader
     participant Follower1
@@ -32,19 +33,21 @@ sequenceDiagram
     Leader->>Producer: ACK (acks=all satisfied)
 
 
-* What happens when one broker holding a replica goes offline ?
+### What happens when one broker holding a replica goes offline ?
 
   With RF=3, suppose one follower goes offline:
 
-* ISR shrinks from [Leader, F1, F2] → [Leader, F1]
+* ISR shrinks from (** [Leader, F1, F2] → [Leader, F1] **)
    The ISR shrinks from 3 to 2 (if the dead broker led a partition, the controller elects a new leader from the ISR).
 
-* ISR still has 2 replicas, which satisfies min.insync.replicas=2
+* ISR still has (** 2 replicas **), which satisfies `min.insync.replicas=2`
 
    2 >= min ISR, so writes keep succeeding, now acknowledged by the two survivors. There is a short stall first: until the dead follower is dropped from the ISR (`replica.lag.time.max.ms`, 30 s by default), `acks=all` is still waiting on it. `UnderReplicatedPartitions` goes above 0. That is an alert, not an outage.
 * Producer writes with acks=all continue normally
 
 * The offline broker becomes an out-of-sync replica (OSR)
+#### Differences:
+
     Before failure:        After one broker offline:
     ISR = [L, F1, F2]      ISR = [L, F1]
     OSR = []               OSR = [F2]
@@ -53,9 +56,7 @@ sequenceDiagram
 Kafka prioritizes durability over availability.
 
 
-**One broker offline.**  
-
-**Two brokers offline.** 
+### What happens when two brokers holding a replica goes offline ?
 
 If two brokers fail:
 
@@ -69,16 +70,16 @@ Producer cannot write with acks=all
 
 The ISR falls to 1, which is below the minimum, so produce requests fail with `NotEnoughReplicasException`; the producer retries and then surfaces the error. Nothing is silently accepted with weaker durability. If the survivor was in the ISR it becomes leader and consumers can still read. If it was *not* in the ISR (it was lagging), the partition is offline unless `unclean.leader.election.enable=true`, which I would leave off because it can lose acknowledged data. We pick consistency over availability.
 
-**Why `min.insync.replicas=2`, not 3.
+### Why `min.insync.replicas=2`, not 3.
 
 Setting min.insync.replicas=2 strikes the right balance between:
 
-1. Durability
+#### 1. Durability
 Ensures every acknowledged write is stored on at least two brokers
 
 Protects against single‑broker failure
 
-2. Availability
+#### 2. Availability
 If min.insync.replicas=3:
 
 All three replicas must be in sync for writes to succeed
@@ -87,18 +88,18 @@ Even one broker going offline would block all writes
 
 This is too strict for most production environments
 
-3. Practicality
+#### 3. Practicality
 With RF=3, requiring 2 in‑sync replicas is the industry standard
 
 Allows the cluster to tolerate one broker failure without impacting producers
 
-* Summary Table
+#### Summary Table
 
-      Setting           Durability  Availability    Practical? 
-min.insync.replicas=1      Weak         High          Risky 
-min.insync.replicas=2     Strong        Good        ✔ Common choice 
-min.insync.replicas=3   Very strong     Low         ✘ Too strict 
-
+| Setting | Durability | Availability | Practical? |
+| --- | --- | --- | --- |
+| **min.insync.replicas=1** | Weak | High | Risky |
+| **min.insync.replicas=2** | Strong | Good | ✔ Common choice |
+| **min.insync.replicas=3** | Very strong | Low | ✘ Too strict |
 
 ## 1.2 Confluent Cloud on GCP — network path
 
