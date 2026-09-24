@@ -10,7 +10,7 @@ A producer writes with (**acks=all**), and the topic is configured with:
 
 This configuration provides strong durability guarantees.
 
-### What `acks=all` waits for.
+### 1.1.1 What `acks=all` waits for.
 * `acks=all` (or `acks=-1`) means: The leader will acknowledge the write only after all in‑sync replicas (ISR) have successfully written the message to their logs.
 
 * With `min.insync.replicas=2`, Kafka requires:
@@ -34,7 +34,7 @@ If fewer than 2 replicas are in the ISR, the write is rejected.
     Leader->>Producer: ACK (acks=all satisfied)
 
 
-### What happens when one broker holding a replica goes offline ?
+### 1.1.2 What happens when one broker holding a replica goes offline ?
 
   With `RF=3`, suppose one follower goes offline:
 
@@ -49,14 +49,16 @@ If fewer than 2 replicas are in the ISR, the write is rejected.
 * The offline broker becomes an out-of-sync replica (OSR)
 #### Differences:
 
-    Before failure:        After one broker offline:
-    ISR = [L, F1, F2]      ISR = [L, F1]
-    OSR = []               OSR = [F2]
-    Writes allowed         Writes allowed
+|   Before failure:  | After one broker offline: | 
+|        ---         |          ---              | 
+            
+|   ISR = [L, F1, F2]|      ISR = [L, F1]        |
+|   OSR = []         |      OSR = [F2]           |
+|   Writes allowed   |      Writes allowed       |
 
 Kafka prioritizes durability over availability.
 
-### What happens when two brokers holding a replica goes offline ?
+### 1.1.3 What happens when two brokers holding a replica goes offline ?
 
 If two brokers fail:
 
@@ -70,7 +72,7 @@ Producer cannot write with `acks=all`
 
 The ISR falls to 1, which is below the minimum, so produce requests fail with `NotEnoughReplicasException`; the producer retries and then surfaces the error. Nothing is silently accepted with weaker durability. If the survivor was in the ISR it becomes leader and consumers can still read. If it was *not* in the ISR (it was lagging), the partition is offline unless `unclean.leader.election.enable=true`, which I would leave off because it can lose acknowledged data. We pick consistency over availability.
 
-### Why `min.insync.replicas=2`, not 3.
+### 1.1.4 Why `min.insync.replicas=2`, not 3.
 
 Setting `min.insync.replicas=2` strikes the right balance between:
 
@@ -112,25 +114,25 @@ During bootstrap, the client receives the list of broker hostnames, and each bro
 The client then establishes **per‑broker connections** through PSC, ensuring all Kafka traffic stays inside Google’s private network.
 
 ```text
-**GCE VM (client VPC)**
+GCE VM (client VPC)
     |
     | DNS lookup for Kafka bootstrap hostname
     v
-**Private Cloud DNS zone**
+Private Cloud DNS zone
     |
     | resolves to PSC endpoint IP
     v
-**GCP Private Service Connect endpoint**
+GCP Private Service Connect endpoint
     |
     v
-**Confluent Cloud network**
+Confluent Cloud network
     |
     v
-**Kafka bootstrap endpoint**
+Kafka bootstrap endpoint
     |
     | Metadata response
     v
-**Per-broker hostnames**
+Per-broker hostnames
     |
     +----> Broker 1 connection
     +----> Broker 2 connection
@@ -150,18 +152,49 @@ If the zone is attached to a different VPC (for example, a shared-services VPC),
 
 * A common misconfiguration is attaching the Confluent private DNS zone to the **wrong VPC**, causing broker hostnames to resolve to **public Confluent endpoints** instead of **PSC private IPs**.
 This leads to TLS handshake failures, public egress attempts, or clients failing to connect entirely.
-You can detect this by running dig or nslookup from the GCE VM and checking whether broker hostnames resolve to **10.x.x.x PSC IPs**.
+You can detect this by running `dig` or `nslookup` from the GCE VM and checking whether broker hostnames resolve to **10.x.x.x PSC IPs**.
 If they resolve to public IPs, the DNS zone is not attached correctly.
 Fixing the issue requires attaching the private DNS zone to the client VPC or configuring Cloud DNS peering properly.
 
 ## 1.3 Producer latency triage
 
+* Producer **p99 latency** increased from **30 ms → ~400 ms**, while **throughput is unchanged** and **broker CPU is flat**.
+This usually indicates a bottleneck in the producer path, network, or broker I/O rather than CPU saturation.
+
 Given unchanged throughput and flat broker CPU, I would investigate:
+#### 1.3.1 Likely Causes (Ranked Most → Least Likely)
 
 1. **Network latency/retransmissions** — check producer request latency and TCP retransmissions.
-2. **Broker disk/storage latency** — check produce request queue/processing latency and disk `await`/I/O utilization.
-3. **ISR/replication pressure** — check `UnderReplicatedPartitions`, ISR changes, and produce request errors/retries.
+Even small RTT spikes can push p99 latency up without affecting throughput. Metric/log to check:
+
+* `network_rtt_ms` or `socket-timeouts` in producer logs**
+
+*  Broker metric: `kafka.network.RequestMetrics.RequestQueueTimeMs.p99`
+
+2. **Broker disk/storage latency** — check produce request queue/processing latency and disk `await`/ `I/O` utilization.
+Broker CPU may be flat, but disk `I/O` latency can delay fsync and replication. Metric/log to check:
+
+* Broker metric: `kafka.server.ReplicaFetcherManager.ReplicaFetcherLag`
+
+* OS metric: `iostat -x` (await, svctm)
+
+3. **ISR/replication pressure** — check `UnderReplicatedPartitions`, **ISR** changes, and produce request `errors`/`retries`.
+
+If **ISR** shrinks, the leader waits longer for follower acknowledgments (`acks=all`). Metric/log to check:
+
+* `UnderReplicatedPartitions`
+
+* Broker log: `ReplicaFetcherThread` warnings
+
 4. **Producer batching/retry behavior** — check `linger.ms`, batch size, retries and producer request latency.
+
+If the producer is hitting `buffer.memory` or `batch.size` limits, p99 latency spikes. Metric/log to check:
+
+* `Producer metric: 'record-send-total`, `bufferpool-wait-time-ns`
+
+* Producer log: `BufferExhaustedException`
+
+#### 1.3.2 Shell Command to Check Recent GC Pauses on Broker Host
 
 A useful broker-side check for recent JVM GC pauses is:
 
