@@ -49,12 +49,11 @@ If fewer than 2 replicas are in the ISR, the write is rejected.
 * The offline broker becomes an out-of-sync replica (OSR)
 #### Differences:
 
-|   Before failure:  | After one broker offline: | 
-|        ---         |          ---              | 
-            
-|   ISR = [L, F1, F2]|      ISR = [L, F1]        |
-|   OSR = []         |      OSR = [F2]           |
-|   Writes allowed   |      Writes allowed       |
+|   Before failure:    | After one broker offline: |
+|        ---           |          ---              |            
+|   ISR = [L, F1, F2]  |      ISR = [L, F1]        |
+|   OSR = []           |      OSR = [F2]           |
+|   Writes allowed     |      Writes allowed       |
 
 Kafka prioritizes durability over availability.
 
@@ -164,37 +163,45 @@ This usually indicates a bottleneck in the producer path, network, or broker I/O
 Given unchanged throughput and flat broker CPU, I would investigate:
 #### 1.3.1 Likely Causes (Ranked Most → Least Likely)
 
-1. **Network latency/retransmissions** — check producer request latency and TCP retransmissions.
+**1. Network latency/retransmissions** — check producer request latency and TCP retransmissions.
+
+**2. Broker disk/storage latency** — check produce request queue/processing latency and disk `await`/ `I/O` utilization.
+
+**3. ISR/replication pressure** — check `UnderReplicatedPartitions`, **ISR** changes, and produce request `errors`/`retries`.
+
+**4. Producer batching/retry behavior** — check `linger.ms`, batch size, retries and producer request latency.
+
+### 1.3.2 For each cause, name one metric or one log line you would check.
+
+**1. Network RTT increase or intermittent packet loss**
 Even small RTT spikes can push p99 latency up without affecting throughput. Metric/log to check:
 
-* `network_rtt_ms` or `socket-timeouts` in producer logs**
+* `network_rtt_ms` or `socket-timeouts` in producer logs
 
-*  Broker metric: `kafka.network.RequestMetrics.RequestQueueTimeMs.p99`
+* Broker metric: `kafka.network.RequestMetrics.RequestQueueTimeMs.p99`
 
-2. **Broker disk/storage latency** — check produce request queue/processing latency and disk `await`/ `I/O` utilization.
-Broker CPU may be flat, but disk `I/O` latency can delay fsync and replication. Metric/log to check:
+**2. Broker I/O slowdown (disk latency, page cache pressure)**
+Broker CPU may be flat, but disk I/O latency can delay fsync and replication. Metric/log to check:
 
 * Broker metric: `kafka.server.ReplicaFetcherManager.ReplicaFetcherLag`
 
-* OS metric: `iostat -x` (await, svctm)
+* OS metric: iostat -x (await, svctm)
 
-3. **ISR/replication pressure** — check `UnderReplicatedPartitions`, **ISR** changes, and produce request `errors`/`retries`.
+**3. ISR shrink causing replication delays**
+If ISR shrinks, the leader waits longer for follower acknowledgments (`acks=all`). Metric/log to check:
 
-If **ISR** shrinks, the leader waits longer for follower acknowledgments (`acks=all`). Metric/log to check:
+* UnderReplicatedPartitions
 
-* `UnderReplicatedPartitions`
+* Broker log: ReplicaFetcherThread warnings
 
-* Broker log: `ReplicaFetcherThread` warnings
+**4. Producer-side batching or buffer exhaustion**
+If the producer is hitting `buffer.memory` or `batch.size limits`, p99 latency spikes. Metric/log to check:
 
-4. **Producer batching/retry behavior** — check `linger.ms`, batch size, retries and producer request latency.
+* Producer metric: `record-send-total`, `bufferpool-wait-time-ns`
 
-If the producer is hitting `buffer.memory` or `batch.size` limits, p99 latency spikes. Metric/log to check:
+* robProducer log: `BufferExhaustedException`
 
-* `Producer metric: 'record-send-total`, `bufferpool-wait-time-ns`
-
-* Producer log: `BufferExhaustedException`
-
-#### 1.3.2 Shell Command to Check Recent GC Pauses on Broker Host
+#### 1.3.3 Shell Command to Check Recent GC Pauses on Broker Host
 
 A useful broker-side check for recent JVM GC pauses is:
 
