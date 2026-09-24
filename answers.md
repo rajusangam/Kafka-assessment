@@ -4,9 +4,9 @@
 
 A producer writes with (**acks=all**), and the topic is configured with:
 
-* (**Replication Factor (RF): 3**)
+* **Replication Factor (RF): 3**
 
-* (**min.insync.replicas = 2**)
+* **min.insync.replicas = 2**
 
 This configuration provides strong durability guarantees.
 
@@ -15,12 +15,13 @@ This configuration provides strong durability guarantees.
 
 * With `min.insync.replicas=2`, Kafka requires:
 
-Leader + (**at least one follower**) to confirm the write before acknowledging the producer.
+Leader + **at least one follower** to confirm the write before acknowledging the producer.
 
 If fewer than 2 replicas are in the ISR, the write is rejected.
 ### Flow Diagram
 
-(**sequence Diagram**)
+**sequence Diagram**
+
     participant Producer
     participant Leader
     participant Follower1
@@ -37,10 +38,10 @@ If fewer than 2 replicas are in the ISR, the write is rejected.
 
   With `RF=3`, suppose one follower goes offline:
 
-* ISR shrinks from **[Leader, F1, F2] → [Leader, F1]**
+* **ISR** shrinks from **[Leader, F1, F2] → [Leader, F1]**
    The ISR shrinks from 3 to 2 (if the dead broker led a partition, the controller elects a new leader from the ISR).
 
-* ISR still has **2 replicas**, which satisfies `min.insync.replicas=2`
+* **ISR** still has **2 replicas**, which satisfies `min.insync.replicas=2`
 
    2 >= min ISR, so writes keep succeeding, now acknowledged by the two survivors. There is a short stall first: until the dead follower is dropped from the ISR (`replica.lag.time.max.ms`, 30 s by default), `acks=all` is still waiting on it. `UnderReplicatedPartitions` goes above 0. That is an alert, not an outage.
 * Producer writes with acks=all continue normally
@@ -55,24 +56,23 @@ If fewer than 2 replicas are in the ISR, the write is rejected.
 
 Kafka prioritizes durability over availability.
 
-
 ### What happens when two brokers holding a replica goes offline ?
 
 If two brokers fail:
 
 ISR shrinks to only the leader → ISR = [Leader]
 
-**ISR** count = 1, which is less than min.insync.replicas=2
+**ISR** count = 1, which is less than `min.insync.replicas=2`
 
-Kafka rejects all writes with NOT_ENOUGH_REPLICAS error
+Kafka rejects all writes with **NOT_ENOUGH_REPLICAS** error
 
-Producer cannot write with acks=all
+Producer cannot write with `acks=all`
 
 The ISR falls to 1, which is below the minimum, so produce requests fail with `NotEnoughReplicasException`; the producer retries and then surfaces the error. Nothing is silently accepted with weaker durability. If the survivor was in the ISR it becomes leader and consumers can still read. If it was *not* in the ISR (it was lagging), the partition is offline unless `unclean.leader.election.enable=true`, which I would leave off because it can lose acknowledged data. We pick consistency over availability.
 
 ### Why `min.insync.replicas=2`, not 3.
 
-Setting min.insync.replicas=2 strikes the right balance between:
+Setting `min.insync.replicas=2` strikes the right balance between:
 
 #### 1. Durability
 Ensures every acknowledged write is stored on at least two brokers
@@ -103,8 +103,16 @@ Allows the cluster to tolerate one broker failure without impacting producers
 
 ## 1.2 Confluent Cloud on GCP — network path
 
+#### 1.2.1 Path from a GCE client in your VPC to the Confluent Cloud Dedicated cluster (via PSC)
+
+* A GCE VM in the client VPC reaches the Confluent Cloud Dedicated cluster through a **Private Service Connect (PSC) endpoint**.
+When the Kafka client resolves the bootstrap hostname, DNS returns a **private PSC IP** instead of a public endpoint.
+The client first connects to the PSC endpoint, which forwards traffic privately over Google’s backbone to Confluent Cloud in **us‑central1**.
+During bootstrap, the client receives the list of broker hostnames, and each broker hostname again resolves to a PSC private IP.
+The client then establishes **per‑broker connections** through PSC, ensuring all Kafka traffic stays inside Google’s private network.
+
 ```text
-**GCE client**
+**GCE VM (client VPC)**
     |
     | DNS lookup for Kafka bootstrap hostname
     v
@@ -129,7 +137,22 @@ Allows the cluster to tolerate one broker failure without impacting producers
     +----> Broker 3 connection
 ```
 
-The client first resolves the bootstrap hostname through the private DNS configuration and connects to the PSC endpoint. Kafka then returns broker metadata, after which the client opens separate connections to the advertised broker endpoints. For GCP PSC, Confluent uses private DNS names under the cluster's Confluent Cloud DNS domain; the private DNS zone must be associated with the VPC that contains the PSC endpoint. A common misconfiguration is associating the private zone with a different VPC. I would detect it with `dig`/`nslookup` from the GCE VM and verify that the result is the expected PSC endpoint address.
+* The client first resolves the bootstrap hostname through the private DNS configuration and connects to the PSC endpoint. Kafka then returns broker metadata, after which the client opens separate connections to the advertised broker endpoints. For GCP PSC, Confluent uses private DNS names under the cluster's Confluent Cloud DNS domain; the private DNS zone must be associated with the VPC that contains the PSC endpoint. A common misconfiguration is associating the private zone with a different VPC. I would detect it with `dig`/`nslookup` from the GCE VM and verify that the result is the expected PSC endpoint address.
+
+#### 1.2.2 Private DNS zone convention and required VPC attachment
+
+* Confluent Cloud creates a private DNS zone using the naming pattern: `<cluster-id>.gcp.confluent.cloud`
+This zone contains private A records that map each broker hostname to the PSC endpoint IP.
+The private DNS zone **must be attached to the same VPC where the GCE Kafka clients run**, because DNS resolution must occur locally within that VPC.
+If the zone is attached to a different VPC (for example, a shared-services VPC), clients will not resolve the PSC private IPs unless DNS peering is explicitly configured.
+
+#### 1.2.3 One common misconfiguration and how to detect it
+
+* A common misconfiguration is attaching the Confluent private DNS zone to the **wrong VPC**, causing broker hostnames to resolve to **public Confluent endpoints** instead of **PSC private IPs**.
+This leads to TLS handshake failures, public egress attempts, or clients failing to connect entirely.
+You can detect this by running dig or nslookup from the GCE VM and checking whether broker hostnames resolve to **10.x.x.x PSC IPs**.
+If they resolve to public IPs, the DNS zone is not attached correctly.
+Fixing the issue requires attaching the private DNS zone to the client VPC or configuring Cloud DNS peering properly.
 
 ## 1.3 Producer latency triage
 
@@ -152,7 +175,7 @@ If Kafka is configured with a dedicated JVM GC log, I would inspect that configu
 
 `serial: 3` is unsafe because three of six brokers can be unavailable simultaneously. Depending on partition placement and leadership, that can remove multiple replicas or leaders for many partitions at once and cause ISR shrinkage. The play should first verify the cluster is healthy and `UnderReplicatedPartitions` is zero. It should then use `serial: 1` and wait for the restarted broker to rejoin before touching another broker. A post-restart health check should verify broker availability, ISR recovery and offline partitions.
 
-Recovery order:
+**Recovery order:**
 
 1. Stop the Ansible rollout.
 2. Identify unavailable brokers and affected partitions.
