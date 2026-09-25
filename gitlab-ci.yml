@@ -1,0 +1,228 @@
+stages:
+  - terraform_fmt
+  - terraform_validate
+  - terraform_plan
+  - terraform_apply
+  - ansible_lint
+  - ansible_dry_run
+  - health_check
+
+# Global defaults
+default:
+  image: hashicorp/terraform:1.9.5
+  before_script:
+    - terraform -version
+    - python3 --version || true
+
+variables:
+  TF_ROOT: "terraform/environments"
+  ANSIBLE_ROOT: "ansible"
+  SCRIPTS_ROOT: "scripts"
+
+# -----------------------------
+# Terraform - Formatting
+# -----------------------------
+terraform:fmt:
+  stage: terraform_fmt
+  script:
+    - cd "${TF_ROOT}/test"
+    - terraform fmt -recursive
+  rules:
+    - if: $CI_COMMIT_BRANCH
+  artifacts:
+    paths:
+      - ${TF_ROOT}
+    expire_in: 1 week
+
+# -----------------------------
+# Terraform - Validate (all envs)
+# -----------------------------
+terraform:validate:
+  stage: terraform_validate
+  script:
+    - cd "${TF_ROOT}/test"
+    - terraform init -backend=false
+    - terraform validate
+    - cd "${CI_PROJECT_DIR}/${TF_ROOT}/sandbox"
+    - terraform init -backend=false
+    - terraform validate
+    - cd "${CI_PROJECT_DIR}/${TF_ROOT}/stage"
+    - terraform init -backend=false
+    - terraform validate
+    - cd "${CI_PROJECT_DIR}/${TF_ROOT}/production"
+    - terraform init -backend=false
+    - terraform validate
+  needs:
+    - terraform:fmt
+  rules:
+    - if: $CI_COMMIT_BRANCH
+  artifacts:
+    paths:
+      - ${TF_ROOT}
+    expire_in: 1 week
+
+# -----------------------------
+# Terraform - Plan (per environment)
+# -----------------------------
+terraform:plan:test:
+  stage: terraform_plan
+  script:
+    - cd "${TF_ROOT}/test"
+    - terraform init
+    - terraform plan -out=tfplan-test
+  needs:
+    - terraform:validate
+  rules:
+    - if: $CI_COMMIT_BRANCH
+  artifacts:
+    paths:
+      - ${TF_ROOT}/test/tfplan-test
+    expire_in: 1 week
+
+terraform:plan:sandbox:
+  stage: terraform_plan
+  script:
+    - cd "${TF_ROOT}/sandbox"
+    - terraform init
+    - terraform plan -out=tfplan-sandbox
+  needs:
+    - terraform:validate
+  rules:
+    - if: $CI_COMMIT_BRANCH
+  artifacts:
+    paths:
+      - ${TF_ROOT}/sandbox/tfplan-sandbox
+    expire_in: 1 week
+
+terraform:plan:stage:
+  stage: terraform_plan
+  script:
+    - cd "${TF_ROOT}/stage"
+    - terraform init
+    - terraform plan -out=tfplan-stage
+  needs:
+    - terraform:validate
+  rules:
+    - if: $CI_COMMIT_BRANCH
+  artifacts:
+    paths:
+      - ${TF_ROOT}/stage/tfplan-stage
+    expire_in: 1 week
+
+terraform:plan:production:
+  stage: terraform_plan
+  script:
+    - cd "${TF_ROOT}/production"
+    - terraform init
+    - terraform plan -out=tfplan-production
+  needs:
+    - terraform:validate
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  artifacts:
+    paths:
+      - ${TF_ROOT}/production/tfplan-production
+    expire_in: 1 week
+
+# -----------------------------
+# Terraform - Apply (manual, per env)
+# -----------------------------
+terraform:apply:test:
+  stage: terraform_apply
+  script:
+    - cd "${TF_ROOT}/test"
+    - terraform init
+    - terraform apply -auto-approve tfplan-test || terraform apply -auto-approve
+  needs:
+    - terraform:plan:test
+  rules:
+    - if: $CI_COMMIT_BRANCH
+  when: manual
+  environment:
+    name: test
+
+terraform:apply:sandbox:
+  stage: terraform_apply
+  script:
+    - cd "${TF_ROOT}/sandbox"
+    - terraform init
+    - terraform apply -auto-approve tfplan-sandbox || terraform apply -auto-approve
+  needs:
+    - terraform:plan:sandbox
+  rules:
+    - if: $CI_COMMIT_BRANCH
+  when: manual
+  environment:
+    name: sandbox
+
+terraform:apply:stage:
+  stage: terraform_apply
+  script:
+    - cd "${TF_ROOT}/stage"
+    - terraform init
+    - terraform apply -auto-approve tfplan-stage || terraform apply -auto-approve
+  needs:
+    - terraform:plan:stage
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  when: manual
+  environment:
+    name: stage
+
+terraform:apply:production:
+  stage: terraform_apply
+  script:
+    - cd "${TF_ROOT}/production"
+    - terraform init
+    - terraform apply -auto-approve tfplan-production || terraform apply -auto-approve
+  needs:
+    - terraform:plan:production
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  when: manual
+  environment:
+    name: production
+
+# -----------------------------
+# Ansible - Lint
+# -----------------------------
+ansible:lint:
+  stage: ansible_lint
+  image: python:3.11
+  before_script:
+    - pip install ansible ansible-lint
+  script:
+    - cd "${ANSIBLE_ROOT}"
+    - ansible-lint site.yml
+  rules:
+    - if: $CI_COMMIT_BRANCH
+
+# -----------------------------
+# Ansible - Dry Run (test inventory)
+# -----------------------------
+ansible:dry-run:test:
+  stage: ansible_dry_run
+  image: python:3.11
+  before_script:
+    - pip install ansible
+  script:
+    - cd "${ANSIBLE_ROOT}"
+    - ansible-playbook -i inventories/test site.yml --check
+  needs:
+    - ansible:lint
+  rules:
+    - if: $CI_COMMIT_BRANCH
+
+# -----------------------------
+# Kafka Health Check Script
+# -----------------------------
+kafka:health-check:
+  stage: health_check
+  image: python:3.11
+  script:
+    - cd "${SCRIPTS_ROOT}"
+    - python3 kafka_health_check.py
+  rules:
+    - if: $CI_COMMIT_BRANCH
+  needs:
+    - terraform:apply:test
