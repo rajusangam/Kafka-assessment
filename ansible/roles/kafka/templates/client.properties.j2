@@ -1,0 +1,4 @@
+bootstrap.servers={{ kafka_bootstrap_servers }}
+security.protocol={{ kafka_security_protocol }}
+sasl.mechanism={{ kafka_sasl_mechanism }}
+sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="{{ kafka_api_key }}" password="{{ kafka_api_secret }}";

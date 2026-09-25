@@ -1,160 +1,96 @@
 #!/usr/bin/env python3
+"""
+Simple Kafka cluster / topic health check for Confluent Cloud.
+
+Usage:
+    export KAFKA_BOOTSTRAP_SERVERS="pkc-xxxxx.us-central1.gcp.confluent.cloud:9092"
+    export KAFKA_API_KEY="..."
+    export KAFKA_API_SECRET="..."
+    python3 kafka_health_check.py --topic orders.v1
+"""
 
 import argparse
-import json
-import re
-import socket
-import subprocess
+import os
 import sys
 
+try:
+    from confluent_kafka.admin import AdminClient
+except ImportError:
+    print("confluent-kafka is required: pip install confluent-kafka", file=sys.stderr)
+    sys.exit(1)
 
-def run(command, timeout=30):
-    try:
-        result = subprocess.run(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=timeout,
-            check=False,
+
+def build_admin_client() -> AdminClient:
+    bootstrap = os.environ.get("KAFKA_BOOTSTRAP_SERVERS")
+    api_key = os.environ.get("KAFKA_API_KEY")
+    api_secret = os.environ.get("KAFKA_API_SECRET")
+
+    if not all([bootstrap, api_key, api_secret]):
+        print(
+            "KAFKA_BOOTSTRAP_SERVERS, KAFKA_API_KEY and KAFKA_API_SECRET "
+            "must all be set.",
+            file=sys.stderr,
         )
-        return result.returncode, result.stdout, result.stderr
-    except subprocess.TimeoutExpired:
-        return 1, "", "command timed out"
+        sys.exit(1)
 
-
-def check_service(service):
-    rc, _, stderr = run(["systemctl", "is-active", "--quiet", service])
-    if rc != 0:
-        return False, stderr.strip() or f"{service} is not active"
-    return True, f"{service} is active"
-
-
-def check_listener(host, port):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(5)
-    try:
-        sock.connect((host, port))
-        return True, f"{host}:{port} is reachable"
-    except OSError as exc:
-        return False, str(exc)
-    finally:
-        sock.close()
-
-
-def check_topics(kafka_topics, bootstrap_server):
-    rc, stdout, stderr = run(
-        [kafka_topics, "--bootstrap-server", bootstrap_server, "--describe"],
-        timeout=60,
+    return AdminClient(
+        {
+            "bootstrap.servers": bootstrap,
+            "security.protocol": "SASL_SSL",
+            "sasl.mechanism": "PLAIN",
+            "sasl.username": api_key,
+            "sasl.password": api_secret,
+        }
     )
-    if rc != 0:
-        return False, stderr.strip() or stdout.strip()
-    return True, stdout
 
 
-def detect_urp(topic_output):
-    """Detect partitions where ISR count is smaller than replica count."""
-    under_replicated = []
+def check_topic(admin: AdminClient, topic_name: str) -> bool:
+    metadata = admin.list_topics(timeout=10)
 
-    for line in topic_output.splitlines():
-        if "Replicas:" not in line or "Isr:" not in line:
-            continue
+    if topic_name not in metadata.topics:
+        print(f"FAIL: topic '{topic_name}' not found on the cluster.")
+        return False
 
-        replicas_match = re.search(r"Replicas:\s*([0-9,\s]+)", line)
-        isr_match = re.search(r"Isr:\s*([0-9,\s]+)", line)
+    topic_metadata = metadata.topics[topic_name]
+    if topic_metadata.error is not None:
+        print(f"FAIL: topic '{topic_name}' has error: {topic_metadata.error}")
+        return False
 
-        if not replicas_match or not isr_match:
-            continue
+    partitions = topic_metadata.partitions
+    print(f"OK: topic '{topic_name}' found with {len(partitions)} partition(s).")
 
-        replicas = [
-            value.strip()
-            for value in replicas_match.group(1).split(",")
-            if value.strip()
-        ]
-        isr = [
-            value.strip()
-            for value in isr_match.group(1).split(",")
-            if value.strip()
-        ]
+    for pid, pmeta in partitions.items():
+        replicas = pmeta.replicas
+        isrs = pmeta.isrs
+        status = "OK" if len(isrs) >= 2 else "WARN"
+        print(
+            f"  partition {pid}: leader={pmeta.leader} "
+            f"replicas={replicas} isrs={isrs} [{status}]"
+        )
 
-        if len(isr) < len(replicas):
-            under_replicated.append(
-                {"replicas": replicas, "isr": isr}
-            )
-
-    return (False, under_replicated) if under_replicated else (True, [])
+    return True
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Kafka broker and ISR health check"
-    )
-    parser.add_argument("--service", default="kafka")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=9092)
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Kafka cluster/topic health check")
     parser.add_argument(
-        "--kafka-topics",
-        default="/opt/kafka/bin/kafka-topics.sh",
+        "--topic",
+        default="orders.v1",
+        help="Topic to check (default: orders.v1)",
     )
-    parser.add_argument("--bootstrap-server", default="127.0.0.1:9092")
     args = parser.parse_args()
 
-    results = []
+    admin = build_admin_client()
 
-    service_ok, service_message = check_service(args.service)
-    results.append({
-        "check": "kafka_service",
-        "healthy": service_ok,
-        "message": service_message,
-    })
+    try:
+        cluster_metadata = admin.list_topics(timeout=10)
+        print(f"Connected. Cluster has {len(cluster_metadata.topics)} topic(s).")
+    except Exception as exc:  # noqa: BLE001
+        print(f"FAIL: could not reach cluster: {exc}", file=sys.stderr)
+        sys.exit(1)
 
-    listener_ok, listener_message = check_listener(args.host, args.port)
-    results.append({
-        "check": "kafka_listener",
-        "healthy": listener_ok,
-        "message": listener_message,
-    })
-
-    cli_ok, topic_output = check_topics(
-        args.kafka_topics,
-        args.bootstrap_server,
-    )
-
-    if not cli_ok:
-        results.append({
-            "check": "kafka_metadata",
-            "healthy": False,
-            "message": topic_output,
-        })
-    else:
-        results.append({
-            "check": "kafka_metadata",
-            "healthy": True,
-            "message": "Kafka metadata query succeeded",
-        })
-
-        urp_ok, urp = detect_urp(topic_output)
-        results.append({
-            "check": "under_replicated_partitions",
-            "healthy": urp_ok,
-            "count": len(urp),
-            "partitions": urp,
-        })
-
-    healthy = all(item["healthy"] for item in results)
-
-    print("Kafka Health Check")
-    print("==================")
-    for item in results:
-        status = "PASS" if item["healthy"] else "FAIL"
-        print(f"{item['check']:<30}: {status}")
-
-    print()
-    print(json.dumps(results, indent=2))
-    print()
-    print(f"RESULT: {'HEALTHY' if healthy else 'UNHEALTHY'}")
-
-    sys.exit(0 if healthy else 1)
+    ok = check_topic(admin, args.topic)
+    sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":

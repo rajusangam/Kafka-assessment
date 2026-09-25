@@ -1,13 +1,6 @@
 ---
-- name: Safely update Kafka brokers
-  hosts: kafka_brokers
+- name: Configure Kafka platform hosts
+  hosts: kafka
   become: true
-
-  # Never restart multiple Kafka brokers simultaneously.
-  serial: 1
-
-  # Stop the rollout if a broker fails.
-  max_fail_percentage: 0
-
   roles:
     - kafka

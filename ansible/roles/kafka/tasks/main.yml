@@ -1,20 +1,13 @@
 ---
-- name: Install Kafka health check script
-  ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../scripts/kafka_health_check.py"
-    dest: "{{ kafka_health_script }}"
-    owner: root
-    group: root
+- name: Ensure kafka client tooling directory exists
+  ansible.builtin.file:
+    path: /opt/kafka-tools
+    state: directory
     mode: "0755"
 
-- name: Run Kafka pre-flight checks
-  ansible.builtin.include_tasks:
-    file: preflight.yml
-
-- name: Apply Kafka configuration
-  ansible.builtin.include_tasks:
-    file: configure.yml
-
-- name: Restart Kafka and verify recovery
-  ansible.builtin.include_tasks:
-    file: restart.yml
+- name: Deploy client configuration
+  ansible.builtin.template:
+    src: client.properties.j2
+    dest: /opt/kafka-tools/client.properties
+    mode: "0640"
+  notify: restart kafka clients
